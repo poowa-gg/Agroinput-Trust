@@ -1,0 +1,5 @@
+{
+  "name": "AgroInputTrust",
+  "description": "A USSD+SMS+Voice system for verifying agro-input authenticity and reporting counterfeits.",
+  "requestFramePermissions": []
+}

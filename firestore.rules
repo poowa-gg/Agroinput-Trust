@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        ((request.auth.token.email == "infoclimatovate@gmail.com" || request.auth.token.email == "oyetunde2999@gmail.com") && request.auth.token.email_verified == true || 
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidString(field, min, max) {
+      return request.resource.data[field] is string && 
+             request.resource.data[field].size() >= min && 
+             request.resource.data[field].size() <= max;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidInput(data) {
+      return hasOnlyAllowedFields(['code', 'product', 'manufacturer', 'status', 'expiryDate']) &&
+             data.code is string && data.code.size() > 0 &&
+             data.product is string && data.product.size() > 0 &&
+             data.manufacturer is string && data.manufacturer.size() > 0 &&
+             data.status in ['VERIFIED', 'USED', 'UNKNOWN', 'SUSPICIOUS'];
+    }
+
+    function isValidVerification(data) {
+      return hasOnlyAllowedFields(['code', 'phoneNumber', 'result', 'timestamp']) &&
+             data.code is string && data.phoneNumber is string &&
+             data.result is string && data.timestamp is string;
+    }
+
+    function isValidReport(data) {
+      return hasOnlyAllowedFields(['phoneNumber', 'location', 'description', 'timestamp', 'status']) &&
+             data.phoneNumber is string && data.location is string &&
+             data.status in ['PENDING', 'INVESTIGATING', 'RESOLVED'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Inputs Registry: Publicly readable for verification logic, Admin can manage
+    match /inputs/{inputId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidInput(request.resource.data);
+    }
+
+    // Verifications: Create for anyone (USSD/SMS), Read for Admin
+    match /verifications/{verificationId} {
+      allow create: if isValidVerification(request.resource.data);
+      allow read: if isAdmin();
+    }
+
+    // Reports: Create for anyone, Read/Update for Admin
+    match /reports/{reportId} {
+      allow create: if isValidReport(request.resource.data);
+      allow read: if isAdmin();
+      allow update: if isAdmin() && isValidReport(request.resource.data);
+    }
+    
+    // Users: Owner or Admin
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+  }
+}

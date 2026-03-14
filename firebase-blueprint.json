@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "input": {
+      "title": "Agro Input",
+      "description": "A registry of seed/fertilizer codes for verification.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "The unique scratch code or batch ID." },
+        "product": { "type": "string", "description": "Name of the product." },
+        "manufacturer": { "type": "string", "description": "Name of the manufacturer." },
+        "status": { "type": "string", "enum": ["VERIFIED", "USED", "UNKNOWN", "SUSPICIOUS"], "description": "Current status of the code." },
+        "expiryDate": { "type": "string", "format": "date", "description": "Product expiry date." }
+      },
+      "required": ["code", "product", "manufacturer", "status"]
+    },
+    "verification": {
+      "title": "Verification Log",
+      "description": "A log of verification attempts.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "The code that was verified." },
+        "phoneNumber": { "type": "string", "description": "The phone number of the user." },
+        "result": { "type": "string", "description": "The result of the verification." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the verification happened." }
+      },
+      "required": ["code", "phoneNumber", "result", "timestamp"]
+    },
+    "report": {
+      "title": "Counterfeit Report",
+      "description": "A report of suspected counterfeit activity.",
+      "type": "object",
+      "properties": {
+        "phoneNumber": { "type": "string", "description": "The reporter's phone number." },
+        "location": { "type": "string", "description": "Location description or market name." },
+        "description": { "type": "string", "description": "Details of the suspicion." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the report was made." },
+        "status": { "type": "string", "enum": ["PENDING", "INVESTIGATING", "RESOLVED"], "description": "Status of the report." }
+      },
+      "required": ["phoneNumber", "location", "timestamp", "status"]
+    }
+  },
+  "firestore": {
+    "inputs": { "schema": "input", "description": "Registry of valid input codes." },
+    "verifications": { "schema": "verification", "description": "Logs of all verification attempts." },
+    "reports": { "schema": "report", "description": "User-submitted reports of suspicious activity." }
+  }
+}
