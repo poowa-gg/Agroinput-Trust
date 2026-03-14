@@ -37,11 +37,25 @@
         "status": { "type": "string", "enum": ["PENDING", "INVESTIGATING", "RESOLVED"], "description": "Status of the report." }
       },
       "required": ["phoneNumber", "location", "timestamp", "status"]
+    },
+    "profile": {
+      "title": "Farmer Profile",
+      "description": "Gamification profile for farmers.",
+      "type": "object",
+      "properties": {
+        "phoneNumber": { "type": "string", "description": "The farmer's phone number." },
+        "points": { "type": "number", "description": "Total points earned." },
+        "badges": { "type": "array", "items": { "type": "string" }, "description": "Earned badges." },
+        "region": { "type": "string", "description": "Farmer's region or cooperative." },
+        "verificationCount": { "type": "number", "description": "Total successful verifications." }
+      },
+      "required": ["phoneNumber", "points", "badges"]
     }
   },
   "firestore": {
     "inputs": { "schema": "input", "description": "Registry of valid input codes." },
     "verifications": { "schema": "verification", "description": "Logs of all verification attempts." },
-    "reports": { "schema": "report", "description": "User-submitted reports of suspicious activity." }
+    "reports": { "schema": "report", "description": "User-submitted reports of suspicious activity." },
+    "profiles": { "schema": "profile", "description": "Farmer gamification profiles." }
   }
 }

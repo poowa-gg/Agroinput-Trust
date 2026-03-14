@@ -23,3 +23,12 @@ export interface CounterfeitReport {
   timestamp: string;
   status: 'PENDING' | 'INVESTIGATING' | 'RESOLVED';
 }
+
+export interface FarmerProfile {
+  id?: string;
+  phoneNumber: string;
+  points: number;
+  badges: string[];
+  region: string;
+  verificationCount: number;
+}

@@ -17,7 +17,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  MoreHorizontal
+  MoreHorizontal,
+  Trophy,
+  Medal,
+  Languages,
+  TrendingUp,
+  Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -29,8 +34,12 @@ import {
   where, 
   getDocs,
   doc,
+  getDoc,
   setDoc,
-  Timestamp
+  updateDoc,
+  increment,
+  Timestamp,
+  limit
 } from 'firebase/firestore';
 import { 
   signInWithPopup, 
@@ -39,8 +48,16 @@ import {
   User
 } from 'firebase/auth';
 import { db, auth } from './firebase';
-import { AgroInput, VerificationLog, CounterfeitReport } from './types';
+import { AgroInput, VerificationLog, CounterfeitReport, FarmerProfile } from './types';
 import { GoogleGenAI } from "@google/genai";
+import { translations, Language } from './translations';
+import { ethers } from 'ethers';
+
+declare global {
+  interface Window {
+    ethereum?: any;
+  }
+}
 
 // --- Error Handling ---
 
@@ -142,33 +159,100 @@ class ErrorBoundary extends Component<any, any> {
 
 // --- Components ---
 
-const USSDSimulator = () => {
+const USSDSimulator = ({ lang, setLang }: { lang: Language, setLang: (l: Language) => void }) => {
   const [text, setText] = useState('');
   const [history, setHistory] = useState<string[]>([]);
-  const [response, setResponse] = useState('Welcome to AgroInputTrust\n1. Verify Input\n2. Report Suspicious Activity\n3. Usage Guide');
+  const [response, setResponse] = useState('');
   const [isSessionActive, setIsSessionActive] = useState(false);
+  const phoneNumber = '+254700000000'; // Simulated phone number
+
+  const t = translations[lang];
+
+  useEffect(() => {
+    setResponse(`${t.welcome}\n${t.menu.verify}\n${t.menu.report}\n${t.menu.guide}\n${t.menu.leaderboard}\n${t.menu.language}`);
+  }, [lang, t]);
+
+  const awardPoints = async (points: number, isVerification: boolean = true) => {
+    try {
+      const profileRef = doc(db, 'profiles', phoneNumber);
+      const profileSnap = await getDoc(profileRef);
+      
+      let badges: string[] = [];
+      let newCount = 1;
+
+      if (profileSnap.exists()) {
+        const data = profileSnap.data() as FarmerProfile;
+        badges = data.badges || [];
+        newCount = (data.verificationCount || 0) + (isVerification ? 1 : 0);
+        
+        await updateDoc(profileRef, {
+          points: increment(points),
+          verificationCount: increment(isVerification ? 1 : 0)
+        });
+      } else {
+        await setDoc(profileRef, {
+          phoneNumber,
+          points,
+          badges: [],
+          region: 'Central Rift',
+          verificationCount: isVerification ? 1 : 0
+        });
+      }
+
+      // Badge logic
+      const newBadges = [...badges];
+      if (newCount >= 1 && !newBadges.includes('First Verification')) newBadges.push('First Verification');
+      if (newCount >= 10 && !newBadges.includes('Trusted Farmer')) newBadges.push('Trusted Farmer');
+      if (points >= 100 && !newBadges.includes('Elite Guardian')) newBadges.push('Elite Guardian');
+
+      if (newBadges.length > badges.length) {
+        await updateDoc(profileRef, { badges: newBadges });
+        return newBadges[newBadges.length - 1];
+      }
+    } catch (error) {
+      console.error('Points error:', error);
+    }
+    return null;
+  };
 
   const handleSend = async (input: string) => {
     if (!input.trim()) return;
     
-    // Simple validation for codes (e.g., alphanumeric only)
-    if (text === '1' && !/^[a-zA-Z0-9]+$/.test(input)) {
-      setResponse('Invalid code format. Please enter alphanumeric characters only.');
+    // Language selection logic
+    if (text === '5') {
+      if (input === '1') setLang('en');
+      else if (input === '2') setLang('sw');
+      reset();
       return;
     }
 
     const newText = text ? `${text}*${input}` : input;
+    
+    // Mocking USSD logic for gamification feedback
+    // In a real app, the backend /api/ussd would handle this and return the message
+    // Here we simulate the points feedback
+    
     const res = await fetch('/api/ussd', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sessionId: 'sim-123',
         serviceCode: '*384#',
-        phoneNumber: '+254700000000',
-        text: newText
+        phoneNumber,
+        text: newText,
+        lang // Pass language to backend
       })
     });
-    const data = await res.text();
+    let data = await res.text();
+
+    // Simulate points awarding on success
+    if (data.includes('VERIFIED') || data.includes('IMEHAKIKISHWA')) {
+      const badge = await awardPoints(10);
+      if (badge) data += `\n${t.results.badgeEarned.replace('{badge}', badge)}`;
+    } else if (data.includes('Thank you') || data.includes('Asante')) {
+      const badge = await awardPoints(20, false);
+      if (badge) data += `\n${t.results.badgeEarned.replace('{badge}', badge)}`;
+    }
     
     if (data.startsWith('END')) {
       setResponse(data.replace('END ', ''));
@@ -184,7 +268,7 @@ const USSDSimulator = () => {
 
   const reset = () => {
     setText('');
-    setResponse('Welcome to AgroInputTrust\n1. Verify Input\n2. Report Suspicious Activity\n3. Usage Guide');
+    setResponse(`${t.welcome}\n${t.menu.verify}\n${t.menu.report}\n${t.menu.guide}\n${t.menu.leaderboard}\n${t.menu.language}`);
     setIsSessionActive(false);
     setHistory([]);
   };
@@ -230,15 +314,72 @@ const USSDSimulator = () => {
   );
 };
 
-const AdminDashboard = ({ user }: { user: User | null }) => {
+const Leaderboard = ({ lang }: { lang: Language }) => {
+  const [profiles, setProfiles] = useState<FarmerProfile[]>([]);
+  const t = translations[lang].dashboard;
+
+  useEffect(() => {
+    const q = query(collection(db, 'profiles'), orderBy('points', 'desc'), limit(5));
+    const unsub = onSnapshot(q, (s) => {
+      setProfiles(s.docs.map(d => ({ id: d.id, ...d.data() } as FarmerProfile)));
+    });
+    return unsub;
+  }, []);
+
+  return (
+    <div className="bg-white rounded-3xl border border-zinc-100 shadow-sm p-6">
+      <div className="flex items-center gap-2 mb-6">
+        <Trophy size={20} className="text-amber-500" />
+        <h3 className="font-bold text-zinc-900">{t.topFarmers}</h3>
+      </div>
+      <div className="space-y-4">
+        {profiles.map((p, i) => (
+          <div key={p.id} className="flex items-center justify-between p-3 bg-zinc-50 rounded-2xl border border-zinc-100">
+            <div className="flex items-center gap-3">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                i === 0 ? 'bg-amber-100 text-amber-700' : 
+                i === 1 ? 'bg-zinc-200 text-zinc-700' : 
+                i === 2 ? 'bg-orange-100 text-orange-700' : 'bg-zinc-100 text-zinc-500'
+              }`}>
+                {i + 1}
+              </div>
+              <div>
+                <p className="text-sm font-bold text-zinc-900">{p.phoneNumber.slice(0, 6)}...{p.phoneNumber.slice(-3)}</p>
+                <p className="text-[10px] text-zinc-400 uppercase tracking-wider">{p.region}</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-sm font-bold text-emerald-600">{p.points} pts</p>
+              <div className="flex gap-1 mt-1">
+                {p.badges?.slice(0, 2).map((b, bi) => (
+                  <div key={bi} title={b} className="w-4 h-4 bg-amber-400 rounded-full flex items-center justify-center">
+                    <Medal size={10} className="text-amber-900" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+        {profiles.length === 0 && (
+          <div className="text-center py-8 text-zinc-400 text-sm italic">No data yet. Start verifying!</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) => {
   const [inputs, setInputs] = useState<AgroInput[]>([]);
   const [verifications, setVerifications] = useState<VerificationLog[]>([]);
   const [reports, setReports] = useState<CounterfeitReport[]>([]);
-  const [activeTab, setActiveTab] = useState<'verifications' | 'reports' | 'inventory'>('verifications');
+  const [profiles, setProfiles] = useState<FarmerProfile[]>([]);
+  const [activeTab, setActiveTab] = useState<'verifications' | 'reports' | 'inventory' | 'leaderboard'>('verifications');
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReport, setSelectedReport] = useState<CounterfeitReport | null>(null);
   const itemsPerPage = 5;
+
+  const t = translations[lang].dashboard;
 
   useEffect(() => {
     if (!user) return;
@@ -246,12 +387,14 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
     const qInputs = query(collection(db, 'inputs'));
     const qVerifications = query(collection(db, 'verifications'), orderBy('timestamp', 'desc'));
     const qReports = query(collection(db, 'reports'), orderBy('timestamp', 'desc'));
+    const qProfiles = query(collection(db, 'profiles'), orderBy('points', 'desc'));
 
     const unsubInputs = onSnapshot(qInputs, (s) => setInputs(s.docs.map(d => ({ id: d.id, ...d.data() } as AgroInput))), (e) => handleFirestoreError(e, OperationType.LIST, 'inputs'));
     const unsubVerifications = onSnapshot(qVerifications, (s) => setVerifications(s.docs.map(d => ({ id: d.id, ...d.data() } as VerificationLog))), (e) => handleFirestoreError(e, OperationType.LIST, 'verifications'));
     const unsubReports = onSnapshot(qReports, (s) => setReports(s.docs.map(d => ({ id: d.id, ...d.data() } as CounterfeitReport))), (e) => handleFirestoreError(e, OperationType.LIST, 'reports'));
+    const unsubProfiles = onSnapshot(qProfiles, (s) => setProfiles(s.docs.map(d => ({ id: d.id, ...d.data() } as FarmerProfile))), (e) => handleFirestoreError(e, OperationType.LIST, 'profiles'));
 
-    return () => { unsubInputs(); unsubVerifications(); unsubReports(); };
+    return () => { unsubInputs(); unsubVerifications(); unsubReports(); unsubProfiles(); };
   }, [user]);
 
   useEffect(() => {
@@ -264,6 +407,7 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
       case 'verifications': data = verifications; break;
       case 'reports': data = reports; break;
       case 'inventory': data = inputs; break;
+      case 'leaderboard': data = profiles; break;
     }
 
     if (!searchTerm) return data;
@@ -274,6 +418,7 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
       if ('product' in item && item.product.toLowerCase().includes(term)) return true;
       if ('phoneNumber' in item && item.phoneNumber.toLowerCase().includes(term)) return true;
       if ('location' in item && item.location.toLowerCase().includes(term)) return true;
+      if ('region' in item && item.region.toLowerCase().includes(term)) return true;
       return false;
     });
   };
@@ -338,7 +483,7 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
   if (!user) return (
     <div className="flex flex-col items-center justify-center p-12 bg-white rounded-3xl shadow-sm border border-zinc-100">
       <ShieldCheck size={48} className="text-emerald-500 mb-4" />
-      <h2 className="text-2xl font-bold text-zinc-900 mb-2">Admin Access Required</h2>
+      <h2 className="text-2xl font-bold text-zinc-900 mb-2">{t.adminDashboard}</h2>
       <p className="text-zinc-500 mb-6 text-center max-w-xs">Sign in to view the counterfeit risk heatmap and verification logs.</p>
       <button 
         onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}
@@ -357,7 +502,7 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
             <LayoutDashboard size={24} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-zinc-900">Ops Dashboard</h2>
+            <h2 className="text-xl font-bold text-zinc-900">{t.adminDashboard}</h2>
             <p className="text-sm text-zinc-500">Monitoring quality control & trust</p>
           </div>
         </div>
@@ -379,7 +524,7 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
 
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
         <div className="flex gap-1 p-1 bg-zinc-100 rounded-xl w-fit">
-          {(['verifications', 'reports', 'inventory'] as const).map((tab) => (
+          {(['verifications', 'reports', 'inventory', 'leaderboard'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -387,7 +532,7 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
                 activeTab === tab ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'
               }`}
             >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === 'leaderboard' ? t.leaderboard : tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
         </div>
@@ -409,26 +554,34 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
           <thead className="bg-zinc-50 text-zinc-500 font-medium border-bottom border-zinc-100">
             {activeTab === 'verifications' && (
               <tr>
-                <th className="px-6 py-4">Code</th>
-                <th className="px-6 py-4">Phone</th>
-                <th className="px-6 py-4">Result</th>
-                <th className="px-6 py-4">Time</th>
+                <th className="px-6 py-4">{t.tableHeaders.code}</th>
+                <th className="px-6 py-4">{t.tableHeaders.phone}</th>
+                <th className="px-6 py-4">{t.tableHeaders.result}</th>
+                <th className="px-6 py-4">{t.tableHeaders.time}</th>
               </tr>
             )}
             {activeTab === 'reports' && (
               <tr>
-                <th className="px-6 py-4">Reporter</th>
-                <th className="px-6 py-4">Location</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4 text-right">Actions</th>
+                <th className="px-6 py-4">{t.tableHeaders.reporter}</th>
+                <th className="px-6 py-4">{t.tableHeaders.location}</th>
+                <th className="px-6 py-4">{t.tableHeaders.status}</th>
+                <th className="px-6 py-4 text-right">{t.tableHeaders.actions}</th>
               </tr>
             )}
             {activeTab === 'inventory' && (
               <tr>
-                <th className="px-6 py-4">Code</th>
-                <th className="px-6 py-4">Product</th>
-                <th className="px-6 py-4">Manufacturer</th>
-                <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4">{t.tableHeaders.code}</th>
+                <th className="px-6 py-4">{t.tableHeaders.product}</th>
+                <th className="px-6 py-4">{t.tableHeaders.manufacturer}</th>
+                <th className="px-6 py-4">{t.tableHeaders.status}</th>
+              </tr>
+            )}
+            {activeTab === 'leaderboard' && (
+              <tr>
+                <th className="px-6 py-4">{t.tableHeaders.farmer}</th>
+                <th className="px-6 py-4">{t.tableHeaders.region}</th>
+                <th className="px-6 py-4">{t.tableHeaders.points}</th>
+                <th className="px-6 py-4">{t.tableHeaders.badges}</th>
               </tr>
             )}
           </thead>
@@ -482,6 +635,22 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
                   }`}>
                     {i.status}
                   </span>
+                </td>
+              </tr>
+            ))}
+            {activeTab === 'leaderboard' && (paginatedData as FarmerProfile[]).map((p) => (
+              <tr key={p.id} className="hover:bg-zinc-50 transition-colors">
+                <td className="px-6 py-4 text-zinc-900 font-medium">{p.phoneNumber}</td>
+                <td className="px-6 py-4 text-zinc-500">{p.region}</td>
+                <td className="px-6 py-4 font-bold text-emerald-600">{p.points}</td>
+                <td className="px-6 py-4">
+                  <div className="flex gap-1">
+                    {p.badges?.map((b, bi) => (
+                      <span key={bi} className="px-2 py-1 bg-amber-100 text-amber-700 rounded-md text-[10px] font-bold">
+                        {b}
+                      </span>
+                    ))}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -618,10 +787,12 @@ const AdminDashboard = ({ user }: { user: User | null }) => {
   );
 };
 
-const GuideGenerator = () => {
+const GuideGenerator = ({ lang }: { lang: Language }) => {
   const [product, setProduct] = useState('');
   const [guide, setGuide] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const t = translations[lang].dashboard;
 
   const generateGuide = async () => {
     if (!product) return;
@@ -636,7 +807,8 @@ const GuideGenerator = () => {
         2. Safety Precautions (PPE)
         3. Best Crop Stage for application
         4. Storage instructions.
-        Format as clear bullet points. Keep it under 150 words.`,
+        Format as clear bullet points. Keep it under 150 words.
+        Output the guide in ${lang === 'en' ? 'English' : 'Swahili'}.`,
       });
       setGuide(response.text || 'Failed to generate guide.');
     } catch (err) {
@@ -651,7 +823,7 @@ const GuideGenerator = () => {
     <div className="bg-emerald-900 text-white p-8 rounded-3xl shadow-xl w-full max-w-md">
       <div className="flex items-center gap-2 mb-6">
         <FileText size={24} className="text-emerald-400" />
-        <h2 className="text-xl font-bold">AI Usage Guide</h2>
+        <h2 className="text-xl font-bold">{t.aiGuideTitle}</h2>
       </div>
       
       <div className="space-y-4">
@@ -671,7 +843,7 @@ const GuideGenerator = () => {
           disabled={loading || !product}
           className="w-full py-3 bg-emerald-400 text-emerald-950 font-bold rounded-xl hover:bg-emerald-300 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
         >
-          {loading ? 'Generating...' : <><Send size={18} /> Generate Guide</>}
+          {loading ? 'Generating...' : <><Send size={18} /> {t.generateGuide}</>}
         </button>
 
         {guide && (
@@ -680,6 +852,7 @@ const GuideGenerator = () => {
             animate={{ opacity: 1, y: 0 }}
             className="mt-6 p-4 bg-emerald-800/50 rounded-2xl border border-emerald-700 text-sm leading-relaxed whitespace-pre-wrap"
           >
+            <h4 className="text-[10px] font-bold text-emerald-300 uppercase tracking-widest mb-2">{t.usageGuide}</h4>
             {guide}
           </motion.div>
         )}
@@ -688,8 +861,170 @@ const GuideGenerator = () => {
   );
 };
 
+// --- Legal Modal Component ---
+
+const LegalModal = ({ 
+  isOpen, 
+  onClose, 
+  type 
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  type: 'docs' | 'privacy' | 'contact' 
+}) => {
+  if (!isOpen) return null;
+
+  const content = {
+    docs: {
+      title: "Documentation",
+      body: (
+        <div className="space-y-4">
+          <section>
+            <h4 className="font-bold text-zinc-900">Overview</h4>
+            <p className="text-sm text-zinc-600">AgroInputTrust is a decentralized verification platform designed to eliminate counterfeit agro-inputs from the supply chain. We empower farmers with simple tools to verify seeds, fertilizers, and pesticides.</p>
+          </section>
+          <section>
+            <h4 className="font-bold text-zinc-900">How to Verify</h4>
+            <p className="text-sm text-zinc-600">1. Locate the scratch panel on your product packaging.<br/>2. Scratch to reveal the unique 12-digit code.<br/>3. Dial *384# (or use our simulator) and enter the code.<br/>4. Receive instant verification of authenticity.</p>
+          </section>
+          <section>
+            <h4 className="font-bold text-zinc-900">Reporting Counterfeits</h4>
+            <p className="text-sm text-zinc-600">If a product is flagged as suspicious, you can submit a report including the market location and photos. This data helps regulators track and shut down counterfeit operations.</p>
+          </section>
+          <section>
+            <h4 className="font-bold text-zinc-900">Rewards System</h4>
+            <p className="text-sm text-zinc-600">Earn 10 points for every valid verification and 20 points for reporting suspicious items. Points can be redeemed for agricultural insurance discounts and premium advice.</p>
+          </section>
+        </div>
+      )
+    },
+    privacy: {
+      title: "Privacy Policy",
+      body: (
+        <div className="space-y-4">
+          <section>
+            <h4 className="font-bold text-zinc-900">Data Collection</h4>
+            <p className="text-sm text-zinc-600">We collect your phone number for session management and point tracking. When reporting, we may collect location data to map counterfeit hotspots.</p>
+          </section>
+          <section>
+            <h4 className="font-bold text-zinc-900">Data Usage</h4>
+            <p className="text-sm text-zinc-600">Your data is used strictly for verification services, reward distribution, and improving agricultural safety. We do not sell your personal information to third parties.</p>
+          </section>
+          <section>
+            <h4 className="font-bold text-zinc-900">Security</h4>
+            <p className="text-sm text-zinc-600">All verification data is stored securely on our decentralized ledger and encrypted Firestore database. We use industry-standard protocols to prevent unauthorized access.</p>
+          </section>
+          <section>
+            <h4 className="font-bold text-zinc-900">Your Rights</h4>
+            <p className="text-sm text-zinc-600">You can request a summary of your verification history or deletion of your profile at any time by contacting our support team.</p>
+          </section>
+        </div>
+      )
+    },
+    contact: {
+      title: "Contact Support",
+      body: (
+        <div className="space-y-6">
+          <p className="text-sm text-zinc-600">Our support team is available 24/7 to help you with verification issues or reporting counterfeits.</p>
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+              <Smartphone className="text-emerald-500" size={20} />
+              <div>
+                <p className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Phone</p>
+                <p className="text-sm font-medium text-zinc-900">08161656694</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+              <FileText className="text-emerald-500" size={20} />
+              <div>
+                <p className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Email</p>
+                <p className="text-sm font-medium text-zinc-900">infoclimatovate@gmail.com</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+              <ShieldCheck className="text-emerald-500" size={20} />
+              <div>
+                <p className="text-xs text-zinc-400 font-bold uppercase tracking-wider">Social</p>
+                <p className="text-sm font-medium text-zinc-900">@climatovateLTD</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-zinc-900/60 backdrop-blur-sm"
+      />
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="relative bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden"
+      >
+        <div className="px-8 py-6 border-b border-zinc-100 flex items-center justify-between">
+          <h3 className="text-xl font-bold text-zinc-900">{content[type].title}</h3>
+          <button onClick={onClose} className="p-2 hover:bg-zinc-100 rounded-xl transition-colors">
+            <XCircle size={20} className="text-zinc-400" />
+          </button>
+        </div>
+        <div className="p-8 max-h-[70vh] overflow-y-auto">
+          {content[type].body}
+        </div>
+        <div className="px-8 py-6 bg-zinc-50 border-t border-zinc-100 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-6 py-2 bg-zinc-900 text-white rounded-xl font-bold hover:bg-zinc-800 transition-all"
+          >
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [isConnectingWallet, setIsConnectingWallet] = useState(false);
+  const [lang, setLang] = useState<Language>('en');
+  const [legalModal, setLegalModal] = useState<{ isOpen: boolean; type: 'docs' | 'privacy' | 'contact' }>({
+    isOpen: false,
+    type: 'docs'
+  });
+
+  const t = translations[lang].dashboard;
+
+  const connectWallet = async () => {
+    if (typeof window.ethereum !== 'undefined') {
+      setIsConnectingWallet(true);
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const accounts = await provider.send("eth_requestAccounts", []);
+        setWalletAddress(accounts[0]);
+      } catch (error: any) {
+        console.error("Failed to connect to MetaMask:", error);
+        if (error.code === 'ACTION_REJECTED' || error.code === 4001) {
+          // User rejected the request - no need for a loud alert, just log it or show a subtle toast
+          console.log("User rejected the connection request.");
+        } else {
+          alert("Failed to connect to MetaMask. Please try again.");
+        }
+      } finally {
+        setIsConnectingWallet(false);
+      }
+    } else {
+      alert("MetaMask is not installed. Please install it to use this feature.");
+    }
+  };
 
   useEffect(() => {
     const testConnection = async () => {
@@ -720,6 +1055,32 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setLang(lang === 'en' ? 'sw' : 'en')}
+              className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 rounded-xl border border-zinc-200 text-xs font-medium hover:bg-zinc-200 transition-all"
+            >
+              <Languages size={14} className="text-emerald-500" />
+              {lang === 'en' ? 'Kiswahili' : 'English'}
+            </button>
+
+            {walletAddress ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 rounded-xl border border-zinc-200">
+                <Wallet size={14} className="text-emerald-500" />
+                <span className="text-xs font-mono text-zinc-600">
+                  {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+                </span>
+              </div>
+            ) : (
+              <button 
+                onClick={connectWallet}
+                disabled={isConnectingWallet}
+                className="flex items-center gap-2 px-3 py-1.5 bg-zinc-900 text-white rounded-xl hover:bg-zinc-800 transition-all text-xs font-medium"
+              >
+                <Wallet size={14} />
+                {isConnectingWallet ? t.connecting : t.connectWallet}
+              </button>
+            )}
+
             {user ? (
               <div className="flex items-center gap-3">
                 <div className="text-right hidden sm:block">
@@ -729,84 +1090,130 @@ export default function App() {
                   </p>
                 </div>
                 <img src={user.photoURL || ''} className="w-8 h-8 rounded-full border border-zinc-200" referrerPolicy="no-referrer" />
-                <button onClick={() => auth.signOut()} className="text-xs text-zinc-400 hover:text-zinc-600">Sign Out</button>
+                <button onClick={() => auth.signOut()} className="text-xs text-zinc-400 hover:text-zinc-600">{t.signOut}</button>
               </div>
             ) : (
               <button 
                 onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}
                 className="text-sm font-medium text-zinc-600 hover:text-zinc-900"
               >
-                Admin Login
+                {t.adminLogin}
               </button>
             )}
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-8 py-12">
+      <main className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
         {/* Hero Section */}
-        <div className="mb-16 text-center max-w-2xl mx-auto">
-          <h2 className="text-4xl font-bold text-zinc-900 mb-4 tracking-tight">Solving the trust bottleneck in agriculture.</h2>
-          <p className="text-lg text-zinc-500">A USSD+SMS+Voice system to verify input authenticity and report counterfeit hotspots in real-time.</p>
+        <div className="mb-12 sm:mb-16 text-center max-w-2xl mx-auto">
+          <h2 className="text-3xl sm:text-4xl font-bold text-zinc-900 mb-4 tracking-tight leading-tight">{t.heroTitle}</h2>
+          <p className="text-base sm:text-lg text-zinc-500">{t.heroSubtitle}</p>
         </div>
 
         {/* Grid Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
           {/* Left Column: Simulator & Guide */}
-          <div className="lg:col-span-4 space-y-8">
-            <USSDSimulator />
-            <GuideGenerator />
+          <div className="lg:col-span-4 space-y-6 sm:space-y-8">
+            <USSDSimulator lang={lang} setLang={setLang} />
+            <Leaderboard lang={lang} />
+            <GuideGenerator lang={lang} />
           </div>
 
           {/* Right Column: Dashboard */}
           <div className="lg:col-span-8">
-            <AdminDashboard user={user} />
+            <AdminDashboard user={user} lang={lang} />
           </div>
         </div>
 
         {/* Features Section */}
-        <div className="mt-24 grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="p-8 bg-white rounded-3xl border border-zinc-100 shadow-sm">
+        <div className="mt-16 sm:mt-24 grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
+          <div className="p-6 sm:p-8 bg-white rounded-3xl border border-zinc-100 shadow-sm">
             <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mb-6">
               <Smartphone size={24} />
             </div>
-            <h3 className="text-lg font-bold mb-2">USSD Verification</h3>
-            <p className="text-zinc-500 text-sm leading-relaxed">Farmers verify seeds and fertilizers using simple scratch codes on any mobile device, no internet required.</p>
+            <h3 className="text-lg font-bold mb-2">{t.ussdTitle}</h3>
+            <p className="text-zinc-500 text-sm leading-relaxed">{t.ussdDesc}</p>
           </div>
           
-          <div className="p-8 bg-white rounded-3xl border border-zinc-100 shadow-sm">
+          <div className="p-6 sm:p-8 bg-white rounded-3xl border border-zinc-100 shadow-sm">
             <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mb-6">
               <AlertTriangle size={24} />
             </div>
-            <h3 className="text-lg font-bold mb-2">Hotspot Mapping</h3>
-            <p className="text-zinc-500 text-sm leading-relaxed">Crowdsourced reports of suspicious inputs create a real-time heatmap for regulators and manufacturers.</p>
+            <h3 className="text-lg font-bold mb-2">{t.hotspotTitle}</h3>
+            <p className="text-zinc-500 text-sm leading-relaxed">{t.hotspotDesc}</p>
           </div>
 
-          <div className="p-8 bg-white rounded-3xl border border-zinc-100 shadow-sm">
+          <div className="p-6 sm:p-8 bg-white rounded-3xl border border-zinc-100 shadow-sm">
             <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
               <FileText size={24} />
             </div>
-            <h3 className="text-lg font-bold mb-2">AI Usage Guides</h3>
-            <p className="text-zinc-500 text-sm leading-relaxed">Gemini-powered micro-guides provide dosage, safety, and storage instructions grounded in product labels.</p>
+            <h3 className="text-lg font-bold mb-2">{t.aiGuideTitle}</h3>
+            <p className="text-zinc-500 text-sm leading-relaxed">{t.aiGuideDesc}</p>
           </div>
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="mt-24 border-t border-zinc-100 py-12 px-8">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex items-center gap-2 opacity-50">
-            <ShieldCheck size={20} />
-            <span className="text-sm font-bold">AgroInputTrust</span>
+      <footer className="mt-16 sm:mt-24 border-t border-zinc-100 py-12 px-4 sm:px-8">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+          <div className="flex flex-col items-center md:items-start gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center text-white">
+                <ShieldCheck size={18} />
+              </div>
+              <span className="text-sm font-bold tracking-tight">AgroInputTrust</span>
+            </div>
+            <p className="text-xs text-zinc-400 max-w-[200px] text-center md:text-left">
+              Securing the agricultural supply chain through decentralized verification.
+            </p>
           </div>
-          <p className="text-xs text-zinc-400">© 2026 AgroInputTrust. Built for trust and quality control.</p>
-          <div className="flex gap-6 text-xs text-zinc-400">
-            <a href="#" className="hover:text-zinc-600 transition-colors">Documentation</a>
-            <a href="#" className="hover:text-zinc-600 transition-colors">Privacy Policy</a>
-            <a href="#" className="hover:text-zinc-600 transition-colors">Contact Support</a>
+
+          <div className="flex flex-col items-center gap-4">
+            <p className="text-xs text-zinc-400">© 2026 AgroInputTrust. All rights reserved.</p>
+            <div className="flex flex-wrap justify-center gap-4 sm:gap-6 text-[10px] sm:text-xs font-bold text-zinc-400 uppercase tracking-widest">
+              <button 
+                onClick={() => setLegalModal({ isOpen: true, type: 'docs' })}
+                className="hover:text-emerald-500 transition-colors"
+              >
+                Documentation
+              </button>
+              <button 
+                onClick={() => setLegalModal({ isOpen: true, type: 'privacy' })}
+                className="hover:text-emerald-500 transition-colors"
+              >
+                Privacy Policy
+              </button>
+              <button 
+                onClick={() => setLegalModal({ isOpen: true, type: 'contact' })}
+                className="hover:text-emerald-500 transition-colors"
+              >
+                Contact Support
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="text-right hidden lg:block">
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Support</p>
+              <p className="text-xs font-medium text-zinc-900">infoclimatovate@gmail.com</p>
+            </div>
+            <div className="w-10 h-10 bg-zinc-100 rounded-xl flex items-center justify-center text-zinc-400">
+              <Smartphone size={20} />
+            </div>
           </div>
         </div>
       </footer>
+
+      <AnimatePresence>
+        {legalModal.isOpen && (
+          <LegalModal 
+            isOpen={legalModal.isOpen} 
+            type={legalModal.type} 
+            onClose={() => setLegalModal({ ...legalModal, isOpen: false })} 
+          />
+        )}
+      </AnimatePresence>
     </div>
     </ErrorBoundary>
   );

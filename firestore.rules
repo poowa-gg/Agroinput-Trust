@@ -48,9 +48,21 @@ service cloud.firestore {
              data.status in ['PENDING', 'INVESTIGATING', 'RESOLVED'];
     }
 
+    function isValidProfile(data) {
+      return hasOnlyAllowedFields(['phoneNumber', 'points', 'badges', 'region', 'verificationCount']) &&
+             data.phoneNumber is string && data.points is number &&
+             data.badges is list && data.verificationCount is number;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
+
+    // Profiles: Publicly readable (for leaderboard), Create/Update for anyone (simulation)
+    match /profiles/{profileId} {
+      allow read: if true;
+      allow create, update: if isValidProfile(request.resource.data);
+    }
 
     // Inputs Registry: Publicly readable for verification logic, Admin can manage
     match /inputs/{inputId} {
