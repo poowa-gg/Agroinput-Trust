@@ -1000,6 +1000,8 @@ export default function App() {
     isOpen: false,
     type: 'docs'
   });
+  const [adminLoginLoading, setAdminLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const t = translations[lang].dashboard;
 
@@ -1023,6 +1025,26 @@ export default function App() {
       }
     } else {
       alert("MetaMask is not installed. Please install it to use this feature.");
+    }
+  };
+
+  const handleAdminLogin = async () => {
+    setAdminLoginLoading(true);
+    setLoginError(null);
+    try {
+      const provider = new GoogleAuthProvider();
+      // Force account selection to avoid auto-choosing potentially problematic sessions
+      provider.setCustomParameters({ prompt: 'select_account' });
+      await signInWithPopup(auth, provider);
+    } catch (error: any) {
+      console.error("Admin Login Error:", error);
+      let message = "Failed to sign in. Please try again.";
+      if (error.code === 'auth/popup-closed-by-user') message = "Login cancelled.";
+      else if (error.code === 'auth/cancelled-popup-request') message = "Previous request cancelled.";
+      else if (error.code === 'auth/network-request-failed') message = "Network error. Check your connection.";
+      setLoginError(message);
+    } finally {
+      setAdminLoginLoading(false);
     }
   };
 
@@ -1088,12 +1110,20 @@ export default function App() {
                 <button onClick={() => auth.signOut()} className="text-[10px] sm:text-xs text-red-500 hover:text-red-600 font-bold">{t.signOut}</button>
               </div>
             ) : (
-              <button 
-                onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}
-                className="text-[10px] sm:text-sm font-medium text-zinc-600 hover:text-zinc-900 bg-zinc-100 px-2 sm:px-4 py-1.5 rounded-xl border border-zinc-200"
-              >
-                {t.adminLogin}
-              </button>
+              <div className="flex flex-col items-end">
+                <button 
+                  onClick={handleAdminLogin}
+                  disabled={adminLoginLoading}
+                  className={`text-[10px] sm:text-sm font-medium hover:text-zinc-900 bg-zinc-100 px-2 sm:px-4 py-1.5 rounded-xl border border-zinc-200 transition-all ${
+                    adminLoginLoading ? 'opacity-50 cursor-wait' : 'text-zinc-600'
+                  }`}
+                >
+                  {adminLoginLoading ? 'Starting...' : t.adminLogin}
+                </button>
+                {loginError && (
+                  <span className="text-[8px] text-red-500 mt-1 font-medium">{loginError}</span>
+                )}
+              </div>
             )}
           </div>
         </div>
