@@ -43,6 +43,8 @@ import {
 } from 'firebase/firestore';
 import { 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider, 
   onAuthStateChanged,
   User
@@ -1001,7 +1003,7 @@ export default function App() {
     type: 'docs'
   });
   const [adminLoginLoading, setAdminLoginLoading] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<{message: string, code: string} | null>(null);
 
   const t = translations[lang].dashboard;
 
@@ -1028,27 +1030,54 @@ export default function App() {
     }
   };
 
-  const handleAdminLogin = async () => {
+  const handleAdminLogin = async (useRedirect = false) => {
     setAdminLoginLoading(true);
     setLoginError(null);
+    console.log(`Starting Admin Login (${useRedirect ? 'Redirect' : 'Popup'})...`);
     try {
       const provider = new GoogleAuthProvider();
-      // Force account selection to avoid auto-choosing potentially problematic sessions
       provider.setCustomParameters({ prompt: 'select_account' });
-      await signInWithPopup(auth, provider);
+      
+      if (useRedirect) {
+        await signInWithRedirect(auth, provider);
+      } else {
+        await signInWithPopup(auth, provider);
+      }
     } catch (error: any) {
-      console.error("Admin Login Error:", error);
+      console.error("Admin Login Error:", {
+        code: error.code,
+        message: error.message,
+        stack: error.stack
+      });
+      
       let message = "Failed to sign in. Please try again.";
       if (error.code === 'auth/popup-closed-by-user') message = "Login cancelled.";
       else if (error.code === 'auth/cancelled-popup-request') message = "Previous request cancelled.";
       else if (error.code === 'auth/network-request-failed') message = "Network error. Check your connection.";
-      setLoginError(message);
+      else if (error.code === 'auth/unauthorized-domain') message = "Domain not authorized in Firebase Console.";
+      
+      setLoginError({ message, code: error.code });
     } finally {
-      setAdminLoginLoading(false);
+      // If we used redirect, the page will unload, so we won't hit 'finally' here in the same instance
+      if (!useRedirect) setAdminLoginLoading(false);
     }
   };
 
   useEffect(() => {
+    // Handle redirect result on mount
+    const checkRedirect = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result) {
+          console.log("Redirect login successful:", result.user.email);
+        }
+      } catch (error: any) {
+        console.error("Redirect Result Error:", error);
+        setLoginError({ message: "Login failed via redirect.", code: error.code });
+      }
+    };
+    checkRedirect();
+
     const testConnection = async () => {
       try {
         const { getDocFromServer } = await import('firebase/firestore');
@@ -1112,7 +1141,7 @@ export default function App() {
             ) : (
               <div className="flex flex-col items-end">
                 <button 
-                  onClick={handleAdminLogin}
+                  onClick={() => handleAdminLogin(false)}
                   disabled={adminLoginLoading}
                   className={`text-[10px] sm:text-sm font-medium hover:text-zinc-900 bg-zinc-100 px-2 sm:px-4 py-1.5 rounded-xl border border-zinc-200 transition-all ${
                     adminLoginLoading ? 'opacity-50 cursor-wait' : 'text-zinc-600'
@@ -1121,7 +1150,16 @@ export default function App() {
                   {adminLoginLoading ? 'Starting...' : t.adminLogin}
                 </button>
                 {loginError && (
-                  <span className="text-[8px] text-red-500 mt-1 font-medium">{loginError}</span>
+                  <div className="flex flex-col items-end mt-1">
+                    <span className="text-[8px] text-red-500 font-bold uppercase tracking-tight">Error: {loginError.code}</span>
+                    <span className="text-[8px] text-red-500 font-medium">{loginError.message}</span>
+                    <button 
+                      onClick={() => handleAdminLogin(true)}
+                      className="text-[8px] text-emerald-600 hover:text-emerald-700 font-bold mt-1 underline"
+                    >
+                      Try Redirect Login (Use this if popup fails)
+                    </button>
+                  </div>
                 )}
               </div>
             )}
