@@ -19,7 +19,7 @@ const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   app.use(cors());
   app.use(bodyParser.urlencoded({ extended: false }));
@@ -89,14 +89,14 @@ async function startServer() {
         response = t.enterLocation;
       } else if (text.startsWith('2*')) {
         const location = text.split('*')[1];
-        await addDoc(collection(db, 'reports'), {
+        const docRef = await addDoc(collection(db, 'reports'), {
           phoneNumber,
           location,
           description: 'USSD Quick Report',
           timestamp: new Date().toISOString(),
           status: 'PENDING'
         });
-        response = t.reportSuccess;
+        response = `${t.reportSuccess}\nCase ID: ${docRef.id}`;
       } else if (text === '3') {
         response = t.guideSent;
       } else if (text === '4') {

@@ -22,7 +22,10 @@ import {
   Medal,
   Languages,
   TrendingUp,
-  Wallet
+  Wallet,
+  MessageSquare,
+  PhoneCall,
+  Volume2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -251,9 +254,21 @@ const USSDSimulator = ({ lang, setLang }: { lang: Language, setLang: (l: Languag
     if (data.includes('VERIFIED') || data.includes('IMEHAKIKISHWA')) {
       const badge = await awardPoints(10);
       if (badge) data += `\n${t.results.badgeEarned.replace('{badge}', badge)}`;
+      window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
+        text: `Receipt: Product Premium Maize Seed is VERIFIED.\nTxn ID: TRK-${Math.floor(Math.random()*10000)}` 
+      }}));
     } else if (data.includes('Thank you') || data.includes('Asante')) {
       const badge = await awardPoints(20, false);
       if (badge) data += `\n${t.results.badgeEarned.replace('{badge}', badge)}`;
+    }
+    
+    if (data.includes('Case ID:')) {
+      const caseIdMatch = data.match(/Case ID: (\w+)/);
+      if (caseIdMatch) {
+         window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
+            text: `Alert: Report ${caseIdMatch[1].slice(0,6)}... received. Authorities notified.` 
+         }}));
+      }
     }
     
     if (data.startsWith('END')) {
@@ -471,6 +486,8 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
       { code: 'SEED999', product: 'Hybrid Corn v2', manufacturer: 'AgroCorp', status: 'USED', expiryDate: '2025-12-31' },
       { code: 'FERT000', product: 'Urea 46%', manufacturer: 'GlobalAg', status: 'VERIFIED', expiryDate: '2027-01-01' },
       { code: 'FAKE123', product: 'Unknown Fertilizer', manufacturer: 'Unknown', status: 'SUSPICIOUS', expiryDate: '2023-01-01' },
+      { code: '111111', product: 'Premium Maize Seed', manufacturer: 'AgroCorp', status: 'VERIFIED', expiryDate: '2027-12-31' },
+      { code: '222222', product: 'Generic Fertilizer 50kg', manufacturer: 'Unknown Fake Co.', status: 'USED', expiryDate: '2024-01-01' },
     ];
     try {
       for (const item of demoInputs) {
@@ -775,6 +792,23 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
                 </div>
               </div>
 
+              <div className="mt-6 pt-6 border-t border-zinc-100 flex flex-col gap-3">
+                <p className="text-[10px] uppercase tracking-widest text-zinc-400 font-bold mb-1">Escalation</p>
+                <div className="flex gap-4 items-center">
+                  <button 
+                    onClick={() => {
+                      alert('Outbound Call Triggered to Authority + Farmer Conference Line.');
+                      window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
+                        text: `Voice API: Conf call initiated for Report ${selectedReport.id?.slice(0,6)}...` 
+                      }}));
+                    }}
+                    className="flex-1 py-3 bg-red-50 text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+                  >
+                    <PhoneCall size={18} /> Trigger Voice Protocol
+                  </button>
+                </div>
+              </div>
+
               <button 
                 onClick={() => setSelectedReport(null)}
                 className="w-full mt-8 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 font-bold rounded-xl transition-all"
@@ -785,6 +819,53 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+};
+
+const SMSInbox = () => {
+  const [messages, setMessages] = useState<{id: number, text: string, time: string}[]>([]);
+
+  useEffect(() => {
+    const handleSms = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      setMessages(prev => [{
+        id: Date.now(),
+        text: customEvent.detail.text,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      }, ...prev].slice(0, 5));
+    };
+    window.addEventListener('demo-sms', handleSms);
+    return () => window.removeEventListener('demo-sms', handleSms);
+  }, []);
+
+  return (
+    <div className="bg-white p-6 rounded-3xl shadow-sm border border-zinc-100 max-w-md w-full">
+      <div className="flex items-center gap-2 mb-4 text-zinc-900 font-bold">
+        <MessageSquare size={20} className="text-blue-500" />
+        <h2>SMS Receipts & Alerts</h2>
+      </div>
+      <div className="space-y-3 min-h-[150px]">
+        <AnimatePresence>
+          {messages.length === 0 ? (
+            <motion.p initial={{opacity: 0}} animate={{opacity: 1}} className="text-sm text-zinc-400 italic py-4 text-center">
+              Waiting for incoming messages...
+            </motion.p>
+          ) : (
+            messages.map(m => (
+              <motion.div 
+                key={m.id}
+                initial={{ opacity: 0, x: -20, scale: 0.95 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                className="bg-blue-50 p-3 rounded-2xl border border-blue-100"
+              >
+                <p className="text-xs text-blue-900 font-medium whitespace-pre-wrap leading-relaxed">{m.text}</p>
+                <div className="mt-2 text-[10px] text-blue-400 font-bold text-right">{m.time}</div>
+              </motion.div>
+            ))
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 };
@@ -1179,6 +1260,7 @@ export default function App() {
           {/* Left Column: Simulator & Guide */}
           <div className="lg:col-span-4 space-y-6 sm:space-y-8">
             <USSDSimulator lang={lang} setLang={setLang} />
+            <SMSInbox />
             <Leaderboard lang={lang} />
             <GuideGenerator lang={lang} />
           </div>
