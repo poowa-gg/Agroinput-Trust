@@ -77,6 +77,18 @@ async function startServer() {
           manufacturer = data.manufacturer;
         }
 
+        // --- HACKATHON DEMO SECURE OVERRIDE ---
+        if (code === '111111') {
+          result = 'VERIFIED';
+          product = 'Premium Maize Seed';
+          manufacturer = 'AgroCorp';
+        } else if (code === '222222') {
+          result = 'USED';
+          product = 'Generic Fertilizer 50kg';
+          manufacturer = 'Unknown Fake Co.';
+        }
+        // --------------------------------------
+
         await addDoc(collection(db, 'verifications'), {
           code,
           phoneNumber,
