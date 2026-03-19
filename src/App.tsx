@@ -183,37 +183,37 @@ const USSDSimulator = ({ lang, setLang }: { lang: Language, setLang: (l: Languag
       const profileSnap = await getDoc(profileRef);
       
       let badges: string[] = [];
-      let newCount = 1;
+      let currentPoints = 0;
+      let currentCount = 0;
 
       if (profileSnap.exists()) {
         const data = profileSnap.data() as FarmerProfile;
         badges = data.badges || [];
-        newCount = (data.verificationCount || 0) + (isVerification ? 1 : 0);
-        
-        await updateDoc(profileRef, {
-          points: increment(points),
-          verificationCount: increment(isVerification ? 1 : 0)
-        });
-      } else {
-        await setDoc(profileRef, {
-          phoneNumber,
-          points,
-          badges: [],
-          region: 'Central Rift',
-          verificationCount: isVerification ? 1 : 0
-        });
+        currentPoints = data.points || 0;
+        currentCount = data.verificationCount || 0;
       }
 
-      // Badge logic
+      const newCount = currentCount + (isVerification ? 1 : 0);
+      const totalPoints = currentPoints + points;
+      
       const newBadges = [...badges];
       if (newCount >= 1 && !newBadges.includes('First Verification')) newBadges.push('First Verification');
       if (newCount >= 10 && !newBadges.includes('Trusted Farmer')) newBadges.push('Trusted Farmer');
-      if (points >= 100 && !newBadges.includes('Elite Guardian')) newBadges.push('Elite Guardian');
+      if (totalPoints >= 100 && !newBadges.includes('Elite Guardian')) newBadges.push('Elite Guardian');
+
+      const updateData: any = {
+        phoneNumber,
+        points: increment(points),
+        verificationCount: increment(isVerification ? 1 : 0),
+        region: profileSnap.exists() ? (profileSnap.data() as FarmerProfile).region : 'Central Rift'
+      };
 
       if (newBadges.length > badges.length) {
-        await updateDoc(profileRef, { badges: newBadges });
-        return newBadges[newBadges.length - 1];
+        updateData.badges = newBadges;
       }
+
+      await setDoc(profileRef, updateData, { merge: true });
+      return newBadges.length > badges.length ? newBadges[newBadges.length - 1] : null;
     } catch (error) {
       console.error('Points error:', error);
     }
@@ -254,8 +254,25 @@ const USSDSimulator = ({ lang, setLang }: { lang: Language, setLang: (l: Languag
     if (data.includes('VERIFIED') || data.includes('IMEHAKIKISHWA')) {
       const badge = await awardPoints(10);
       if (badge) data += `\n${t.results.badgeEarned.replace('{badge}', badge)}`;
+      
+      // Extract product name from response if possible
+      const productMatch = data.match(/Product: (.*)\n/i) || data.match(/Bidhaa: (.*)\n/i);
+      const productName = productMatch ? productMatch[1] : 'Premium Maize Seed';
+      
       window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
-        text: `Receipt: Product Premium Maize Seed is VERIFIED.\nTxn ID: TRK-${Math.floor(Math.random()*10000)}` 
+        text: `Receipt: Product ${productName} is VERIFIED.\nTxn ID: TRK-${Math.floor(Math.random()*10000)}` 
+      }}));
+    } else if (data.includes('SUSPICIOUS') || data.includes('SHAKA') || data.includes('USED') || data.includes('IMETUMIKA')) {
+      const isSuspicious = data.includes('SUSPICIOUS') || data.includes('SHAKA');
+      const badge = await awardPoints(isSuspicious ? 5 : 2);
+      if (badge) data += `\n${t.results.badgeEarned.replace('{badge}', badge)}`;
+
+      const productMatch = data.match(/Product: (.*)\n/i) || data.match(/Bidhaa: (.*)\n/i);
+      const productName = productMatch ? productMatch[1] : 'Unknown Product';
+      const status = isSuspicious ? 'is SUSPICIOUS' : 'has already been USED';
+
+      window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
+        text: `Alert: Product ${productName} ${status}. Do not use!\nCase ID: ${Math.random().toString(36).substring(7).toUpperCase()}` 
       }}));
     } else if (data.includes('Thank you') || data.includes('Asante')) {
       const badge = await awardPoints(20, false);
@@ -298,7 +315,7 @@ const USSDSimulator = ({ lang, setLang }: { lang: Language, setLang: (l: Languag
       </div>
       
       <div className="bg-black rounded-xl p-4 mb-4 h-64 overflow-y-auto font-mono text-sm border border-zinc-800">
-        <div className="whitespace-pre-wrap text-emerald-400">{response}</div>
+        <div className="whitespace-pre-wrap break-words text-emerald-400">{response}</div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-2">
@@ -394,6 +411,7 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReport, setSelectedReport] = useState<CounterfeitReport | null>(null);
+  const [triggeringVoice, setTriggeringVoice] = useState(false);
   const itemsPerPage = 5;
 
   const t = translations[lang].dashboard;
@@ -489,10 +507,13 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
       { code: '111111', product: 'Premium Maize Seed', manufacturer: 'AgroCorp', status: 'VERIFIED', expiryDate: '2027-12-31' },
       { code: '222222', product: 'Generic Fertilizer 50kg', manufacturer: 'Unknown Fake Co.', status: 'USED', expiryDate: '2024-01-01' },
     ];
+    const { writeBatch } = await import('firebase/firestore');
+    const batch = writeBatch(db);
     try {
       for (const item of demoInputs) {
-        await setDoc(doc(db, 'inputs', item.code), item);
+        batch.set(doc(db, 'inputs', item.code), item);
       }
+      await batch.commit();
       alert('Demo data seeded!');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'inputs');
@@ -568,7 +589,7 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
         </div>
       </div>
 
-      <div className="overflow-hidden border border-zinc-100 rounded-2xl">
+      <div className="overflow-x-auto border border-zinc-100 rounded-2xl">
         <table className="w-full text-left text-sm">
           <thead className="bg-zinc-50 text-zinc-500 font-medium border-bottom border-zinc-100">
             {activeTab === 'verifications' && (
@@ -794,22 +815,35 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
 
               <div className="mt-6 pt-6 border-t border-zinc-100 flex flex-col gap-3">
                 <p className="text-[10px] uppercase tracking-widest text-zinc-400 font-bold mb-1">Escalation</p>
-                <div className="flex gap-4 items-center">
                   <button 
                     onClick={() => {
-                      alert('Outbound Call Triggered to Authority + Farmer Conference Line.');
-                      window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
-                        text: `Voice API: Conf call initiated for Report ${selectedReport.id?.slice(0,6)}...` 
-                      }}));
+                      setTriggeringVoice(true);
+                      setTimeout(() => {
+                        window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
+                          text: `Voice API: Conf call initiated for Report ${selectedReport.id?.slice(0,6)}... Connect to Farmer & Regulator.` 
+                        }}));
+                        setTriggeringVoice(false);
+                      }, 1000);
                     }}
-                    className="flex-1 py-3 bg-red-50 text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+                    disabled={triggeringVoice}
+                    className={`flex-1 py-3 font-bold rounded-xl border transition-all flex items-center justify-center gap-2 ${
+                      triggeringVoice 
+                        ? 'bg-zinc-100 text-zinc-400 border-zinc-200' 
+                        : 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100'
+                    }`}
                   >
-                    <PhoneCall size={18} /> Trigger Voice Protocol
+                    {triggeringVoice ? (
+                       <>
+                         <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
+                         Connecting...
+                       </>
+                    ) : (
+                      <><PhoneCall size={18} /> Trigger Voice Protocol</>
+                    )}
                   </button>
                 </div>
-              </div>
 
-              <button 
+                <button 
                 onClick={() => setSelectedReport(null)}
                 className="w-full mt-8 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-600 font-bold rounded-xl transition-all"
               >

@@ -83,7 +83,7 @@ async function startServer() {
           product = 'Premium Maize Seed';
           manufacturer = 'AgroCorp';
         } else if (code === '222222') {
-          result = 'USED';
+          result = 'SUSPICIOUS';
           product = 'Generic Fertilizer 50kg';
           manufacturer = 'Unknown Fake Co.';
         }
