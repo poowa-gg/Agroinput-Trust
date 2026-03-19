@@ -412,6 +412,10 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedReport, setSelectedReport] = useState<CounterfeitReport | null>(null);
   const [triggeringVoice, setTriggeringVoice] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   const itemsPerPage = 5;
 
   const t = translations[lang].dashboard;
@@ -431,6 +435,64 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
 
     return () => { unsubInputs(); unsubVerifications(); unsubReports(); unsubProfiles(); };
   }, [user]);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+
+      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.onstop = () => {
+        setAudioChunks(chunks);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      setRecordingTime(0);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      alert("Microphone access is required for voice protocol recording.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      setIsRecording(false);
+    }
+  };
+
+  useEffect(() => {
+    let interval: any;
+    if (isRecording) {
+      interval = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const submitVoiceProtocol = () => {
+    setTriggeringVoice(true);
+    // Simulate upload delay
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
+        text: `Voice API: Conf call initiated for Report ${selectedReport?.id?.slice(0,6)}... Audio recording secured on decentralized storage. Connect to Farmer & Regulator.` 
+      }}));
+      setTriggeringVoice(false);
+      setAudioChunks([]);
+      setRecordingTime(0);
+    }, 2000);
+  };
 
   useEffect(() => {
     setCurrentPage(1);
@@ -814,33 +876,63 @@ const AdminDashboard = ({ user, lang }: { user: User | null, lang: Language }) =
               </div>
 
               <div className="mt-6 pt-6 border-t border-zinc-100 flex flex-col gap-3">
-                <p className="text-[10px] uppercase tracking-widest text-zinc-400 font-bold mb-1">Escalation</p>
-                  <button 
-                    onClick={() => {
-                      setTriggeringVoice(true);
-                      setTimeout(() => {
-                        window.dispatchEvent(new CustomEvent('demo-sms', { detail: { 
-                          text: `Voice API: Conf call initiated for Report ${selectedReport.id?.slice(0,6)}... Connect to Farmer & Regulator.` 
-                        }}));
-                        setTriggeringVoice(false);
-                      }, 1000);
-                    }}
-                    disabled={triggeringVoice}
-                    className={`flex-1 py-3 font-bold rounded-xl border transition-all flex items-center justify-center gap-2 ${
-                      triggeringVoice 
-                        ? 'bg-zinc-100 text-zinc-400 border-zinc-200' 
-                        : 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100'
-                    }`}
-                  >
-                    {triggeringVoice ? (
-                       <>
-                         <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
-                         Connecting...
-                       </>
+                  <div className="space-y-3">
+                    {!isRecording && audioChunks.length === 0 ? (
+                      <button 
+                        onClick={startRecording}
+                        className="w-full py-4 bg-red-50 text-red-600 font-bold rounded-2xl border border-red-100 hover:bg-red-100 transition-all flex items-center justify-center gap-3 group"
+                      >
+                        <div className="w-3 h-3 bg-red-500 rounded-full group-hover:animate-pulse"></div>
+                        <PhoneCall size={20} /> Trigger Voice Protocol & Record
+                      </button>
+                    ) : isRecording ? (
+                      <div className="p-4 bg-red-50 border border-red-100 rounded-2xl flex flex-col items-center gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-3 h-3 bg-red-500 rounded-full animate-ping"></div>
+                          <span className="text-red-600 font-bold text-lg font-mono">{formatTime(recordingTime)}</span>
+                        </div>
+                        <p className="text-xs text-red-400 font-medium uppercase tracking-widest text-center">Protocol Active: Speak into microphone to record official report statement...</p>
+                        <button 
+                          onClick={stopRecording}
+                          className="w-full py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-red-200"
+                        >
+                          <Volume2 size={18} /> Stop & Submit Recording
+                        </button>
+                      </div>
                     ) : (
-                      <><PhoneCall size={18} /> Trigger Voice Protocol</>
+                      <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex flex-col items-center gap-4">
+                        <div className="flex items-center gap-3 text-emerald-600">
+                          <CheckCircle2 size={24} />
+                          <span className="font-bold">Recording Complete ({formatTime(recordingTime)})</span>
+                        </div>
+                        <button 
+                          onClick={submitVoiceProtocol}
+                          disabled={triggeringVoice}
+                          className={`w-full py-3 font-bold rounded-xl border transition-all flex items-center justify-center gap-2 ${
+                            triggeringVoice 
+                              ? 'bg-zinc-100 text-zinc-400 border-zinc-200' 
+                              : 'bg-emerald-600 text-white border-emerald-500 hover:bg-emerald-700 shadow-lg shadow-emerald-200'
+                          }`}
+                        >
+                          {triggeringVoice ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                              Sending to Decentralized Storage...
+                            </>
+                          ) : (
+                            <><Send size={18} /> Send Official Report to Authorities</>
+                          )}
+                        </button>
+                        <button 
+                          onClick={() => { setAudioChunks([]); setRecordingTime(0); }}
+                          disabled={triggeringVoice}
+                          className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest hover:text-red-500"
+                        >
+                          Discard & Re-record
+                        </button>
+                      </div>
                     )}
-                  </button>
+                  </div>
                 </div>
 
                 <button 
